@@ -1,0 +1,81 @@
+name: build-and-release
+
+# tag 推送（如 v0.1.0）触发构建并自动发布 Release；main 分支的普通推送只构建不发布
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch: # 允许手动触发
+
+permissions:
+  contents: write # 创建 GitHub Release
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Generate icons
+        run: npm run icon
+
+      - name: Build (portable + nsis)
+        run: npm run dist
+
+      - name: Package launcher zip
+        shell: pwsh
+        run: |
+          $version = (Get-Content package.json | ConvertFrom-Json).version
+          $staging = "dist\pack-temp\DeepSeek-Harness-Desktop-$version"
+          New-Item -ItemType Directory -Path $staging -Force | Out-Null
+          Copy-Item "dist\DeepSeek-Harness-Desktop-$version-portable.exe" $staging
+          Copy-Item "launcher\launcher.ps1" $staging
+          Copy-Item "launcher\启动.bat" $staging
+          Copy-Item "launcher\创建桌面快捷方式.bat" $staging
+          Copy-Item "launcher\使用说明.txt" $staging
+          Compress-Archive -Path $staging -DestinationPath "dist\DeepSeek-Harness-Desktop-$version-便携包.zip"
+          Remove-Item "dist\pack-temp" -Recurse -Force
+
+      - name: Generate checksums
+        shell: pwsh
+        run: |
+          Get-ChildItem dist -Filter *.exe | ForEach-Object {
+            $hash = Get-FileHash $_.FullName -Algorithm SHA256
+            "$($hash.Hash)  $($_.Name)" | Add-Content dist\SHA256SUMS.txt
+          }
+          Get-ChildItem dist -Filter *.zip | ForEach-Object {
+            $hash = Get-FileHash $_.FullName -Algorithm SHA256
+            "$($hash.Hash)  $($_.Name)" | Add-Content dist\SHA256SUMS.txt
+          }
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-build
+          path: |
+            dist/*.exe
+            dist/*.zip
+            dist/SHA256SUMS.txt
+          retention-days: 14
+
+      # 仅 tag 推送时发布 Release
+      - name: Publish Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/*.exe
+            dist/*.zip
+            dist/SHA256SUMS.txt
+          generate_release_notes: true
+          fail_on_unmatched_files: false

@@ -1,0 +1,27 @@
+# 依赖
+node_modules/
+
+# 构建产物
+dist/
+
+# 生成图标（源码是 scripts/make-icon.js 里的 SVG）
+assets/icon.png
+build/icon.ico
+
+# launcher 目录内复制的大体积 exe（保留脚本与文档）
+launcher/*.exe
+
+# 日志
+*.log
+%APPDATA%/dsh-desktop/logs/
+
+# 系统文件
+Thumbs.db
+Desktop.ini
+.DS_Store
+
+# 编辑器
+.vscode/
+.idea/
+*.suo
+*.user
