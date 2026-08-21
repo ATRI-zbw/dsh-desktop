@@ -4,6 +4,9 @@ node_modules/
 # 构建产物
 dist/
 
+# 内置运行时（构建时由 scripts 准备，体积大不入库）
+vendor/
+
 # 生成图标（源码是 scripts/make-icon.js 里的 SVG）
 assets/icon.png
 build/icon.ico

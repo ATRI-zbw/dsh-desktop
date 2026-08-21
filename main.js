@@ -39,10 +39,21 @@ function exists(p) {
   }
 }
 
-/** 解析系统 node.exe(桌面版只负责窗口,服务由系统 Node 进程承担)。 */
+/** 内置 node.exe(安装包自带: resources\node\node.exe;开发: vendor\node\node.exe)。 */
+function bundledNode() {
+  const pkg = process.resourcesPath ? path.join(process.resourcesPath, "node", "node.exe") : null;
+  if (pkg && exists(pkg)) return pkg;
+  const dev = path.join(__dirname, "vendor", "node", "node.exe");
+  if (exists(dev)) return dev;
+  return null;
+}
+
+/** 解析系统 node.exe(优先内置,退回系统安装;环境变量可覆盖)。 */
 function resolveNode() {
   const over = process.env.DSH_DESKTOP_NODE;
   if (over && exists(over)) return over;
+  const bundled = bundledNode();
+  if (bundled) return bundled;
   const candidates = [
     "C:\\Program Files\\nodejs\\node.exe",
     process.env.ProgramFiles ? path.join(process.env.ProgramFiles, "nodejs", "node.exe") : null,
@@ -72,10 +83,21 @@ function npmGlobalRoot(node) {
   }
 }
 
-/** 解析 @deepseek-ai/dsh 的 lib/bin.js。 */
+/** 内置 dsh 的 lib/bin.js(安装包: resources\dsh;开发: vendor\dsh)。 */
+function bundledDshBin() {
+  const pkg = process.resourcesPath ? path.join(process.resourcesPath, "dsh", "lib", "bin.js") : null;
+  if (pkg && exists(pkg)) return pkg;
+  const dev = path.join(__dirname, "vendor", "dsh", "lib", "bin.js");
+  if (exists(dev)) return dev;
+  return null;
+}
+
+/** 解析 @deepseek-ai/dsh 的 lib/bin.js(优先内置,退回系统全局;环境变量可覆盖)。 */
 function resolveDshBin(node) {
   const over = process.env.DSH_DESKTOP_DSH;
   if (over && exists(over)) return over;
+  const bundled = bundledDshBin();
+  if (bundled) return bundled;
   const candidates = [];
   const npmRoot = npmGlobalRoot(node);
   if (npmRoot) candidates.push(path.join(npmRoot, "@deepseek-ai", "dsh", "lib", "bin.js"));

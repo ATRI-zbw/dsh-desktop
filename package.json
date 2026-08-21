@@ -25,6 +25,16 @@
       "package.json",
       "assets/**/*"
     ],
+    "extraResources": [
+      {
+        "from": "vendor/node",
+        "to": "node"
+      },
+      {
+        "from": "vendor/dsh",
+        "to": "dsh"
+      }
+    ],
     "win": {
       "target": [
         {
