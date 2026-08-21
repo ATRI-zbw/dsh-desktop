@@ -128,16 +128,21 @@ function findFreePort() {
 function waitForServer(port, timeoutMs) {
   const deadline = Date.now() + timeoutMs;
   return new Promise((resolve, reject) => {
+    const retry = () => {
+      if (Date.now() > deadline) return reject(new Error("dsh web 服务启动超时"));
+      setTimeout(tick, 500);
+    };
     const tick = () => {
       const req = http.get({ host: "127.0.0.1", port, path: "/", timeout: 2000 }, (res) => {
         res.resume();
-        resolve();
+        if (res.statusCode >= 200 && res.statusCode < 300) {
+          resolve(); // 2xx 才算就绪
+        } else {
+          retry(); // 404/500 等说明服务还在启动或异常，继续等待
+        }
       });
       req.on("timeout", () => req.destroy());
-      req.on("error", () => {
-        if (Date.now() > deadline) return reject(new Error("dsh web 服务启动超时"));
-        setTimeout(tick, 500);
-      });
+      req.on("error", retry);
     };
     tick();
   });
