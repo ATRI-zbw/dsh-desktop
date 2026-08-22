@@ -105,15 +105,15 @@ jobs:
             Write-Host "::warning::build-output.log lines: $((Get-Content build-output.log).Count)"
             $lines = @(Get-Content build-output.log)
             $total = $lines.Count
-            # 从尾部取最多 1000 行,每 200 行一段,段内行号标注在段头
+            # 每段 500 行 x 2 段 = 1000 行;整段编码进单条 ::error:: 消息(换行->%0A)
             $startIdx = [math]::Max(0, $total - 1000)
-            for ($k = 0; $k -lt 5; $k++) {
-              $segStart = $startIdx + ($k * 200)
+            for ($k = 0; $k -lt 2; $k++) {
+              $segStart = $startIdx + ($k * 500)
               if ($segStart -ge $total) { break }
-              $segEnd = [math]::Min($total - 1, $segStart + 199)
-              $seg = $lines[$segStart..$segEnd] -join "`n"
-              Write-Host "::error::--- seg$k lines $($segStart+1)-$($segEnd+1) ---"
-              Write-Host $seg
+              $segEnd = [math]::Min($total - 1, $segStart + 499)
+              $seg = ($lines[$segStart..$segEnd] -join "`n")
+              $esc = $seg.Replace('%', '%25').Replace("`r", '%0D').Replace("`n", '%0A')
+              Write-Host "::error::--- seg$k lines $($segStart+1)-$($segEnd+1) ---$esc"
             }
             exit $code
           }
