@@ -1,6 +1,6 @@
 {
   "name": "dsh-desktop",
-  "version": "0.1.1",
+  "version": "0.1.8",
   "description": "DeepSeek Harness 桌面版 —— Electron 壳包装 dsh web 服务",
   "main": "main.js",
   "author": "dsh-desktop",
