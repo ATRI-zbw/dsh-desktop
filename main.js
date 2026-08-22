@@ -504,10 +504,10 @@ function themeCss(prefs) {
         { png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg", webp: "image/webp", bmp: "image/bmp", gif: "image/gif" }[ext] ||
         "image/png";
       const dataUrl = `data:${mime};base64,${buf.toString("base64")}`;
-      // 多容器覆盖 + 中间层透明化:SPA 常在主容器上设背景色盖住 body
+      // 多容器覆盖 + 顶层容器透明化:SPA 常在主容器上设背景色盖住 body
       css += [
         `html,body{background-image:url("${dataUrl}") !important;background-size:cover !important;background-position:center !important;background-repeat:no-repeat !important;background-attachment:fixed !important;background-color:transparent !important;}`,
-        `body>div,body>#root,body>#app,#root,#app{background:transparent !important;}`,
+        `body>div,body>#root,body>#app,#root,#app{background:transparent !important;background-image:none !important;background-color:transparent !important;}`,
       ].join("\n");
     } catch {
       // 图片不可读则退回渐变
@@ -522,21 +522,26 @@ function themeCss(prefs) {
   return css;
 }
 
-/** 把主题应用到已加载的 dsh web 页面(注入 CSS)。 */
-let injectedCssKey = null;
+/** 把主题应用到已加载的 dsh web 页面。
+ * 用 executeJavaScript 注入带唯一 id 的 <style> 标签(替换式),
+ * 比 insertCSS 更可靠且可重复调用。 */
+const THEME_STYLE_ID = "dsh-desktop-theme-style";
 function applyThemeToWeb(prefs) {
   if (!mainWindow || mainWindow.isDestroyed()) return;
   const css = themeCss(prefs);
-  const apply = async () => {
+  const script = `(() => {
     try {
-      if (injectedCssKey !== null) {
-        await mainWindow.webContents.removeInsertedCSS(injectedCssKey).catch(() => {});
-        injectedCssKey = null;
+      let s = document.getElementById(${JSON.stringify(THEME_STYLE_ID)});
+      if (!s) {
+        s = document.createElement("style");
+        s.id = ${JSON.stringify(THEME_STYLE_ID)};
+        document.head.appendChild(s);
       }
-      injectedCssKey = await mainWindow.webContents.insertCSS(css);
-    } catch {}
-  };
-  apply();
+      s.textContent = ${JSON.stringify(css)};
+      return true;
+    } catch (e) { return false; }
+  })()`;
+  mainWindow.webContents.executeJavaScript(script).catch(() => {});
 }
 
 // ---------------------------------------------------------------- 设置窗口
@@ -772,8 +777,8 @@ if (!gotLock) {
       }
       if (mainWindow && !mainWindow.isDestroyed()) {
         mainWindow.loadURL(`http://127.0.0.1:${port}`);
-        // 页面完全加载后再注入主题 + 挂饰(did-finish-load 时 insertCSS 才可靠;
-        // SPA 内部路由不触发 did-navigate,背景被覆盖由挂饰内监测自动重注入)
+        // 页面完全加载后注入主题 + 挂饰。SPA 的 React 在 HTML 之后挂载,
+        // 因此 did-finish-load 后延迟多次重试,等渲染稳定;背景被覆盖由挂饰内监测兜底。
         const injectAll = () => {
           applyThemeToWeb(theme);
           try {
@@ -782,11 +787,11 @@ if (!gotLock) {
           } catch {}
         };
         mainWindow.webContents.on("did-finish-load", () => {
-          // 只对 dsh 域页面注入(排除 splash 等 data: URL)
           const url = mainWindow.webContents.getURL();
-          if (url.startsWith(`http://127.0.0.1:${port}`)) {
-            injectAll();
-          }
+          if (!url.startsWith(`http://127.0.0.1:${port}`)) return;
+          // 立即 + 延迟重试(等 SPA 首屏渲染完),确保主题生效
+          injectAll();
+          [1500, 4000, 9000].forEach((ms) => setTimeout(injectAll, ms));
         });
       }
       // 服务就绪后:首次使用引导(无 Key) + 静默检查更新
