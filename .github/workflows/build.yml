@@ -83,15 +83,30 @@ jobs:
         env:
           ELECTRON_MIRROR: https://npmmirror.com/mirrors/electron/
           ELECTRON_BUILDER_BINARIES_MIRROR: https://npmmirror.com/mirrors/electron-builder-binaries/
+          DEBUG: electron-builder*
         shell: pwsh
         run: |
-          # 直接输出到 stdout 让 GitHub 记录完整日志（不重定向，避免静默失败时丢错误）
-          npm run dist 2>&1 | Tee-Object -FilePath build-output.log
+          Write-Host "=== env diagnostics ==="
+          node --version
+          npm --version
+          Get-CimInstance Win32_OperatingSystem | Select-Object Caption, Version
+          $os = Get-CimInstance Win32_OperatingSystem
+          Write-Host "OS: $($os.Caption) $($os.Version)"
+          $mem = Get-CimInstance Win32_OperatingSystem
+          Write-Host "FreeMem: {0:N0} MB / TotalMem: {1:N0} MB" -f ($mem.FreePhysicalMemory/1024), ($mem.TotalVisibleMemorySize/1024)
+          $disk = Get-PSDrive C
+          Write-Host "C: free: {0:N1} GB" -f ($disk.Free/1GB)
+          Get-Content node_modules\@electron\rebuild\package.json | ConvertFrom-Json | Select-Object @{n='@electron/rebuild';e={$_.version}}
+          Get-Content node_modules\electron-builder\package.json | ConvertFrom-Json | Select-Object @{n='electron-builder';e={$_.version}}
+          Write-Host "=== build ==="
+          # 直接运行并捕获退出码;避免管道吞掉 $LASTEXITCODE
+          npm run dist *> build-output.log
           $code = $LASTEXITCODE
           Write-Host "BUILD_EXIT=$code"
           if ($code -ne 0) {
-            # 把错误暴露为 annotation,便于通过 API 读取
-            Get-Content build-output.log -Tail 60 | ForEach-Object { Write-Host "::error::$($_)" }
+            Write-Host "=== build-output.log tail 80 ==="
+            Get-Content build-output.log -Tail 80
+            Get-Content build-output.log -Tail 80 | ForEach-Object { Write-Host "::error::$($_)" }
             exit $code
           }
 
