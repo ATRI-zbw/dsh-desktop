@@ -103,7 +103,16 @@ jobs:
           Write-Host "::warning::BUILD_EXIT=$code"
           if ($code -ne 0) {
             Write-Host "::warning::build-output.log lines: $((Get-Content build-output.log).Count)"
-            Get-Content build-output.log -Tail 100 | ForEach-Object { Write-Host "::error::$($_)" }
+            $lines = @(Get-Content build-output.log)
+            $total = $lines.Count
+            for ($i = 4; $i -ge 0; $i--) {
+              $end = $total - ($i * 200)
+              $start = [math]::Max(0, $end - 200)
+              if ($start -ge $total) { continue }
+              $seg = $lines[$start..([math]::Min($total - 1, $end - 1))] -join "`n"
+              Write-Host "::error::--- seg$i lines $($start+1)-$end ---"
+              Write-Host $seg
+            }
             exit $code
           }
 
