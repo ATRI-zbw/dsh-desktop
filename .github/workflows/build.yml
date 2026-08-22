@@ -86,8 +86,12 @@ jobs:
           npm run dist *> build-output.log
           $code = $LASTEXITCODE
           Write-Host "BUILD_EXIT=$code"
-          Get-Content build-output.log -Tail 60
-          if ($code -ne 0) { exit $code }
+          if ($code -ne 0) {
+            # 把错误暴露为 annotation,便于通过 API 读取
+            Get-Content build-output.log -Tail 40 | ForEach-Object { Write-Host "::error::$($_)" }
+            exit $code
+          }
+          Get-Content build-output.log -Tail 15
 
       - name: Upload build log on failure
         if: failure()
