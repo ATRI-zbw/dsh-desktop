@@ -12,9 +12,9 @@
   "scripts": {
     "start": "electron .",
     "icon": "node scripts/make-icon.js",
-    "dist": "electron-builder --win",
-    "dist:portable": "electron-builder --win portable",
-    "dist:nsis": "electron-builder --win nsis"
+    "dist": "electron-builder --win --publish never",
+    "dist:portable": "electron-builder --win portable --publish never",
+    "dist:nsis": "electron-builder --win nsis --publish never"
   },
   "build": {
     "appId": "ai.deepseek.harness.desktop",
