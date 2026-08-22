@@ -1,4 +1,4 @@
-name: build-and-release
+﻿name: build-and-release
 
 # tag 推送（如 v0.1.0）触发构建并自动发布 Release；main 分支的普通推送只构建不发布
 on:
@@ -137,7 +137,7 @@ jobs:
           Copy-Item "launcher\启动.bat" $staging
           Copy-Item "launcher\创建桌面快捷方式.bat" $staging
           Copy-Item "launcher\使用说明.txt" $staging
-          Compress-Archive -Path $staging -DestinationPath "dist\DeepSeek-Harness-Desktop-$version-便携包.zip"
+          Compress-Archive -Path $staging -DestinationPath "dist\DeepSeek-Harness-Desktop-$version-portable-pack.zip"
           Remove-Item "dist\pack-temp" -Recurse -Force
 
       - name: Generate checksums
