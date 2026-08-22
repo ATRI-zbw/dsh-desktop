@@ -37,8 +37,9 @@
   ].join("\n");
   host.appendChild(style);
 
-  // 设置按钮
-  const btnSettings = el("button", { class: "w-btn w-settings" }, "⚙ 设置");
+  // 设置按钮(与 dsh 自带设置区分,明确为桌面版设置)
+  const btnSettings = el("button", { class: "w-btn w-settings" }, "⚙ 桌面设置");
+  btnSettings.title = "打开桌面版设置（外观 / 更新 / token 详情）";
   btnSettings.addEventListener("click", () => api.openSettings());
 
   // token 按钮:显示用量,点击刷新

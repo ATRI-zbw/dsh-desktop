@@ -495,8 +495,22 @@ function savePrefs(prefs) {
 function themeCss(prefs) {
   let css = "";
   if (prefs.backgroundImage) {
-    const b = prefs.backgroundImage.replace(/\\/g, "/").replace(/"/g, '\\"');
-    css += `html,body{background-image:url("file:///${b}") !important;background-size:cover !important;background-position:center !important;background-repeat:no-repeat !important;background-attachment:fixed !important;}`;
+    // file:// 会被 Chromium 拦截(http 页面禁止加载本地文件),
+    // 改为读取文件转 base64 data URL,保证跨源可用。
+    try {
+      const buf = fs.readFileSync(prefs.backgroundImage);
+      const ext = path.extname(prefs.backgroundImage).toLowerCase().replace(".", "");
+      const mime =
+        { png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg", webp: "image/webp", bmp: "image/bmp", gif: "image/gif" }[ext] ||
+        "image/png";
+      const dataUrl = `data:${mime};base64,${buf.toString("base64")}`;
+      css += `html,body{background-image:url("${dataUrl}") !important;background-size:cover !important;background-position:center !important;background-repeat:no-repeat !important;background-attachment:fixed !important;}`;
+    } catch {
+      // 图片不可读则退回渐变
+      if (prefs.primary) {
+        css += `html,body{background:linear-gradient(160deg,${prefs.primary} 0%,${prefs.primary} 32%,${prefs.dark || "#1D2A6E"} 100%) !important;}`;
+      }
+    }
   } else if (prefs.primary) {
     css += `html,body{background:linear-gradient(160deg,${prefs.primary} 0%,${prefs.primary} 32%,${prefs.dark || "#1D2A6E"} 100%) !important;}`;
   }
@@ -526,7 +540,7 @@ function openSettings() {
     resizable: false,
     minimizable: false,
     maximizable: false,
-    title: `${APP_TITLE} · 设置`,
+    title: `${APP_TITLE} · 桌面版设置`,
     parent: mainWindow || undefined,
     modal: false,
     autoHideMenuBar: true,
