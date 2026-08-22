@@ -17,6 +17,7 @@ const https = require("node:https");
 const fs = require("node:fs");
 const path = require("node:path");
 const os = require("node:os");
+const zlib = require("node:zlib");
 
 const APP_TITLE = "DeepSeek Harness 桌面版";
 const READY_TIMEOUT_MS = 120_000; // dsh web 首次启动可能较慢
@@ -326,6 +327,83 @@ function writeStoredKey(key) {
   fs.renameSync(tmp, f);
 }
 
+// ---------------------------------------------------------------- token 统计
+/**
+ * 从 DSH_HOME 下所有会话日志聚合 token 用量。
+ * 会话日志是 .jsonl.zstd(多帧拼接),用 Node 内置 zstd 逐帧解压,
+ * 统计 assistant/chunk 事件里的 usage 字段。
+ * 返回 { sessions, inputTokens, outputTokens, cacheReadTokens, reasoningTokens, totalTokens }。
+ */
+function zstdFrames(buf) {
+  const MAGIC = Buffer.from([0x28, 0xb5, 0x2f, 0xfd]);
+  const starts = [];
+  let i = 0;
+  while (i < buf.length - 3) {
+    const idx = buf.indexOf(MAGIC, i);
+    if (idx === -1) break;
+    starts.push(idx);
+    i = idx + 4;
+  }
+  const parts = [];
+  for (let f = 0; f < starts.length; f++) {
+    const s = starts[f];
+    const e = f + 1 < starts.length ? starts[f + 1] : buf.length;
+    try {
+      parts.push(zlib.zstdDecompressSync(buf.subarray(s, e)));
+    } catch {}
+  }
+  return Buffer.concat(parts).toString("utf8");
+}
+
+function collectTokenUsage() {
+  const home = dshHome();
+  const sessionsDir = path.join(home, "sessions");
+  const acc = { sessions: 0, inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, reasoningTokens: 0, totalTokens: 0, files: 0 };
+  if (!fs.existsSync(sessionsDir)) return acc;
+  let roots;
+  try {
+    roots = fs.readdirSync(sessionsDir, { withFileTypes: true });
+  } catch {
+    return acc;
+  }
+  for (const root of roots) {
+    if (!root.isDirectory()) continue;
+    const sub = path.join(sessionsDir, root.name);
+    let sessionDirs;
+    try {
+      sessionDirs = fs.readdirSync(sub, { withFileTypes: true });
+    } catch {
+      continue;
+    }
+    for (const d of sessionDirs) {
+      if (!d.isDirectory()) continue;
+      const logFile = path.join(sub, d.name, "session.jsonl.zstd");
+      if (!fs.existsSync(logFile)) continue;
+      acc.files++;
+      try {
+        const text = zstdFrames(fs.readFileSync(logFile));
+        // 逐行解析,命中 usage 事件
+        for (const line of text.split(/\r?\n/)) {
+          if (!line.includes('"usage"')) continue;
+          try {
+            const ev = JSON.parse(line);
+            const u = ev && ev.data && ev.data.chunk && ev.data.chunk.usage;
+            if (!u) continue;
+            acc.inputTokens += u.inputTokens || 0;
+            acc.outputTokens += u.outputTokens || 0;
+            acc.cacheReadTokens += u.cacheReadTokens || 0;
+            acc.reasoningTokens += u.reasoningTokens || 0;
+          } catch {}
+        }
+      } catch {}
+    }
+  }
+  acc.totalTokens = acc.inputTokens + acc.outputTokens + acc.cacheReadTokens + acc.reasoningTokens;
+  // sessions 计数:统计到日志文件即视为一个会话(活跃中亦计入)
+  acc.sessions = acc.files;
+  return acc;
+}
+
 // ---------------------------------------------------------------- 更新内置 dsh
 function updateBundledDsh() {
   return new Promise((resolve) => {
@@ -350,6 +428,57 @@ function updateBundledDsh() {
       }
     });
   });
+}
+
+// ---------------------------------------------------------------- 外观主题
+const DEFAULT_THEME = {
+  primary: "#4D6BFE",
+  dark: "#1D2A6E",
+  backgroundImage: "", // 用户自定义背景图（绝对路径），空 = 默认渐变
+  injectedCss: "",     // 注入 dsh web 页面的自定义 CSS
+};
+
+function prefsFile() {
+  return path.join(app.getPath("userData"), "prefs.json");
+}
+
+function loadPrefs() {
+  try {
+    const raw = fs.readFileSync(prefsFile(), "utf8");
+    const j = JSON.parse(raw);
+    return { ...DEFAULT_THEME, ...(j && typeof j === "object" ? j : {}) };
+  } catch {
+    return { ...DEFAULT_THEME };
+  }
+}
+
+function savePrefs(prefs) {
+  fs.mkdirSync(app.getPath("userData"), { recursive: true });
+  const tmp = prefsFile() + ".tmp";
+  fs.writeFileSync(tmp, JSON.stringify(prefs, null, 2), "utf8");
+  fs.renameSync(tmp, prefsFile());
+}
+
+/** 组装注入 dsh web 页面的主题 CSS(主题色 + 自定义背景 + 用户 CSS)。 */
+function themeCss(prefs) {
+  let css = "";
+  if (prefs.backgroundImage) {
+    const b = prefs.backgroundImage.replace(/\\/g, "/").replace(/"/g, '\\"');
+    css += `html,body{background-image:url("file:///${b}") !important;background-size:cover !important;background-position:center !important;background-repeat:no-repeat !important;background-attachment:fixed !important;}`;
+  } else if (prefs.primary) {
+    css += `html,body{background:linear-gradient(160deg,${prefs.primary} 0%,${prefs.primary} 32%,${prefs.dark || "#1D2A6E"} 100%) !important;}`;
+  }
+  if (prefs.injectedCss) css += "\n" + prefs.injectedCss;
+  return css;
+}
+
+/** 把主题应用到已加载的 dsh web 页面(注入 CSS)。 */
+function applyThemeToWeb(prefs) {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  const css = themeCss(prefs);
+  mainWindow.webContents
+    .insertCSS(css)
+    .catch(() => {});
 }
 
 // ---------------------------------------------------------------- 设置窗口
@@ -435,6 +564,35 @@ function registerIpc() {
     if (typeof url === "string" && url.startsWith("https://")) shell.openExternal(url);
     return true;
   });
+
+  ipcMain.handle("settings:get-tokens", () => collectTokenUsage());
+
+  ipcMain.handle("settings:get-prefs", () => ({ ...theme }));
+
+  ipcMain.handle("settings:set-prefs", (_e, prefs) => {
+    if (!prefs || typeof prefs !== "object") return { ok: false, error: "参数错误" };
+    // 只接受已知字段,防止注入
+    const clean = {};
+    for (const k of ["primary", "dark", "backgroundImage", "injectedCss"]) {
+      if (typeof prefs[k] === "string") clean[k] = prefs[k];
+    }
+    theme = { ...theme, ...clean };
+    try {
+      savePrefs(theme);
+      applyThemeToWeb(theme);
+      return { ok: true };
+    } catch (err) {
+      return { ok: false, error: err.message };
+    }
+  });
+
+  ipcMain.handle("settings:pick-image", async () => {
+    const r = await dialog.showOpenDialog(settingsWindow || mainWindow, {
+      properties: ["openFile"],
+      filters: [{ name: "图片", extensions: ["png", "jpg", "jpeg", "webp", "bmp"] }],
+    });
+    return r.canceled ? null : r.filePaths[0];
+  });
 }
 
 // ---------------------------------------------------------------- 托盘
@@ -459,13 +617,29 @@ function createTray() {
 }
 
 // ---------------------------------------------------------------- 窗口
-const SPLASH_HTML = `<!doctype html><html lang="zh"><head><meta charset="utf-8"><style>
-html,body{margin:0;height:100%;display:flex;flex-direction:column;align-items:center;justify-content:center;background:linear-gradient(135deg,#4D6BFE,#1D2A6E);color:#fff;font-family:"Segoe UI","Microsoft YaHei",sans-serif}
-.logo{font-size:56px;font-weight:800;letter-spacing:2px}
-.msg{margin-top:18px;font-size:15px;opacity:.85}
+/**
+ * 生成启动画面 HTML。渐变用多段色标消除 8-bit 色带（banding）：
+ * 从主题主色经中间过渡色平滑滑向深色，而非两色硬切。
+ * @param {string} primary - 主题主色（如 #4D6BFE）
+ * @param {string} dark    - 渐变深色端（如 #1D2A6E）
+ */
+function splashHtml(primary = "#4D6BFE", dark = "#1D2A6E") {
+  // 主色 → 主色加深 → 深色端，四段平滑插值，配合径向高光降低色带感
+  return `<!doctype html><html lang="zh"><head><meta charset="utf-8"><style>
+html,body{margin:0;height:100%;display:flex;flex-direction:column;align-items:center;justify-content:center;overflow:hidden;color:#fff;font-family:"Segoe UI","Microsoft YaHei",sans-serif;
+background:${primary};
+background:linear-gradient(160deg,${primary} 0%,${primary} 32%,${dark} 100%);
+background-size:100% 100%;}
+html::before{content:"";position:fixed;inset:0;pointer-events:none;background:radial-gradient(120% 90% at 50% 8%,rgba(255,255,255,.10) 0%,rgba(255,255,255,0) 55%);}
+.logo{font-size:56px;font-weight:800;letter-spacing:2px;text-shadow:0 2px 12px rgba(0,0,0,.25)}
+.msg{margin-top:18px;font-size:15px;opacity:.88}
 .spinner{margin-top:26px;width:26px;height:26px;border:3px solid rgba(255,255,255,.35);border-top-color:#fff;border-radius:50%;animation:spin 0.9s linear infinite}
 @keyframes spin{to{transform:rotate(360deg)}}
 </style></head><body><div class="logo">DSH</div><div class="msg">正在启动 DeepSeek Harness 服务…</div><div class="spinner"></div></body></html>`;
+}
+
+// 当前主题(启动时加载一次,设置变更时更新)
+let theme = { ...DEFAULT_THEME };
 
 function createWindow(url) {
   mainWindow = new BrowserWindow({
@@ -482,7 +656,7 @@ function createWindow(url) {
       sandbox: true,
     },
   });
-  mainWindow.loadURL("data:text/html;charset=utf-8," + encodeURIComponent(SPLASH_HTML));
+  mainWindow.loadURL("data:text/html;charset=utf-8," + encodeURIComponent(splashHtml(theme.primary, theme.dark)));
   mainWindow.on("closed", () => {
     mainWindow = null;
   });
@@ -503,6 +677,7 @@ if (!gotLock) {
 
   app.whenReady().then(async () => {
     registerIpc();
+    theme = loadPrefs();
     if (!SMOKE_TEST) createTray();
 
     const node = resolveNode();
@@ -526,6 +701,8 @@ if (!gotLock) {
       }
       if (mainWindow && !mainWindow.isDestroyed()) {
         mainWindow.loadURL(`http://127.0.0.1:${port}`);
+        // 页面加载后注入主题(等 dsh web 就绪)
+        mainWindow.webContents.once("did-finish-load", () => applyThemeToWeb(theme));
       }
       // 服务就绪后:首次使用引导(无 Key) + 静默检查更新
       if (!readStoredKey()) {

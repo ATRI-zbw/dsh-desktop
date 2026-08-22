@@ -28,6 +28,9 @@
   .msg.ok { color:var(--ok); } .msg.err { color:var(--err); } .msg.info { color:var(--muted); }
   .hint { color:var(--muted); font-size:12px; margin-top:6px; line-height:1.6; }
   a { color:var(--blue); }
+  .swatch { width:26px; height:26px; border-radius:50%; border:2px solid #fff; box-shadow:0 0 0 1px #d1d5db; cursor:pointer; }
+  .swatch.sel { box-shadow:0 0 0 2px var(--blue); }
+  textarea { font-family:Consolas,monospace; }
 </style>
 </head>
 <body>
@@ -67,6 +70,41 @@
     </div>
     <div class="msg" id="update-msg"></div>
     <div class="hint">「更新内置 dsh」会从 npm 下载最新版到用户目录（不修改安装目录），下次启动生效。应用更新会跳转到 GitHub Releases 下载页。</div>
+  </div>
+
+  <div class="card">
+    <h2>外观</h2>
+    <div class="row">
+      <span class="label">主题色</span>
+      <div id="swatches" style="display:flex;gap:8px;flex-wrap:wrap;"></div>
+      <input type="color" id="custom-color" value="#4D6BFE" style="width:36px;height:28px;padding:0;border:1px solid #d1d5db;border-radius:4px;background:none;cursor:pointer;">
+    </div>
+    <div class="row">
+      <span class="label">背景图</span>
+      <input type="text" id="bg-image" placeholder="本地图片绝对路径（如 C:\Users\me\Pictures\bg.jpg），留空=默认渐变">
+      <button id="pick-bg" class="ghost">浏览…</button>
+    </div>
+    <div class="row">
+      <span class="label">自定义 CSS</span>
+      <textarea id="injected-css" rows="3" style="flex:1;padding:8px 12px;border:1px solid #d1d5db;border-radius:6px;font-size:12px;font-family:Consolas,monospace;resize:vertical;" placeholder="可选：注入到 dsh 界面的额外样式，如 body{font-size:14px}"></textarea>
+    </div>
+    <div class="row">
+      <button id="save-theme">保存外观</button>
+      <button id="reset-theme" class="danger">恢复默认</button>
+    </div>
+    <div class="msg" id="theme-msg"></div>
+    <div class="hint">主题色应用于启动画面与 dsh 界面背景；背景图和自定义 CSS 会注入 dsh 网页。保存后立即生效。</div>
+  </div>
+
+  <div class="card">
+    <h2>用量统计 <span class="badge ok" id="token-count-sessions" style="margin-left:8px;">-</span></h2>
+    <div class="row"><span class="label">输入 tokens</span><span class="value" id="tk-in">-</span></div>
+    <div class="row"><span class="label">输出 tokens</span><span class="value" id="tk-out">-</span></div>
+    <div class="row"><span class="label">缓存读取</span><span class="value" id="tk-cache">-</span></div>
+    <div class="row"><span class="label">推理 tokens</span><span class="value" id="tk-reason">-</span></div>
+    <div class="row"><span class="label">合计</span><span class="value" id="tk-total">-</span></div>
+    <div class="msg" id="tk-msg"></div>
+    <div class="hint">统计来自本地会话日志（<code>~\.dsh\sessions</code>），仅本机数据，不上传。</div>
   </div>
 
 <script>
@@ -153,6 +191,101 @@
   api.checkUpdate().then((r) => {
     if (r.ok && r.update) $("update-status").textContent = "发现新版 v" + r.latest;
     else if (r.ok) $("update-status").textContent = "已是最新版";
+  }).catch(() => {});
+
+  // ---------- 用量统计(每 5 秒刷新) ----------
+  function fmt(n) {
+    return (n || 0).toLocaleString("zh-CN");
+  }
+  async function refreshTokens() {
+    try {
+      const t = await api.getTokens();
+      $("token-count-sessions").textContent = t.sessions + " 个会话";
+      $("tk-in").textContent = fmt(t.inputTokens);
+      $("tk-out").textContent = fmt(t.outputTokens);
+      $("tk-cache").textContent = fmt(t.cacheReadTokens);
+      $("tk-reason").textContent = fmt(t.reasoningTokens);
+      $("tk-total").textContent = fmt(t.totalTokens);
+      $("tk-msg").textContent = "已扫描 " + t.files + " 个会话日志";
+      $("tk-msg").className = "msg info";
+    } catch (e) {
+      $("tk-msg").textContent = "统计失败：" + e.message;
+      $("tk-msg").className = "msg err";
+    }
+  }
+  refreshTokens();
+  setInterval(refreshTokens, 5000);
+
+  // ---------- 外观 ----------
+  const PRESETS = [
+    { name: "经典蓝", primary: "#4D6BFE", dark: "#1D2A6E" },
+    { name: "青绿", primary: "#0E9F8A", dark: "#0B5D55" },
+    { name: "紫罗兰", primary: "#7C5CE0", dark: "#3D2A75" },
+    { name: "绯红", primary: "#E0455A", dark: "#7A1F2C" },
+    { name: "墨黑", primary: "#334155", dark: "#0F172A" },
+  ];
+  let selPrimary = "#4D6BFE";
+  function renderSwatches() {
+    const box = $("swatches");
+    box.innerHTML = "";
+    PRESETS.forEach((p) => {
+      const el = document.createElement("div");
+      el.className = "swatch" + (p.primary === selPrimary ? " sel" : "");
+      el.style.background = "linear-gradient(135deg," + p.primary + "," + p.dark + ")";
+      el.title = p.name;
+      el.addEventListener("click", () => {
+        selPrimary = p.primary;
+        $("custom-color").value = p.primary;
+        renderSwatches();
+      });
+      box.appendChild(el);
+    });
+  }
+  $("custom-color").addEventListener("input", (e) => {
+    selPrimary = e.target.value;
+    renderSwatches();
+  });
+  $("pick-bg").addEventListener("click", async () => {
+    try {
+      const p = await api.pickImage();
+      if (p) $("bg-image").value = p;
+    } catch { $("bg-image").focus(); }
+  });
+  $("save-theme").addEventListener("click", async () => {
+    const prefs = {
+      primary: selPrimary,
+      dark: (PRESETS.find((p) => p.primary === selPrimary) || {}).dark || "#1D2A6E",
+      backgroundImage: $("bg-image").value.trim(),
+      injectedCss: $("injected-css").value,
+    };
+    try {
+      const r = await api.setPrefs(prefs);
+      if (r.ok) setMsg($("theme-msg"), "外观已保存并生效 ✓", "ok");
+      else setMsg($("theme-msg"), "保存失败：" + (r.error || ""), "err");
+    } catch (e) { setMsg($("theme-msg"), "保存失败：" + e.message, "err"); }
+  });
+  $("reset-theme").addEventListener("click", async () => {
+    const prefs = { primary: "#4D6BFE", dark: "#1D2A6E", backgroundImage: "", injectedCss: "" };
+    try {
+      const r = await api.setPrefs(prefs);
+      if (r.ok) {
+        selPrimary = "#4D6BFE";
+        $("custom-color").value = "#4D6BFE";
+        $("bg-image").value = "";
+        $("injected-css").value = "";
+        renderSwatches();
+        setMsg($("theme-msg"), "已恢复默认外观 ✓", "ok");
+      } else setMsg($("theme-msg"), "恢复失败：" + (r.error || ""), "err");
+    } catch (e) { setMsg($("theme-msg"), "恢复失败：" + e.message, "err"); }
+  });
+  // 加载当前主题到表单
+  api.getPrefs().then((p) => {
+    if (!p) return;
+    selPrimary = p.primary || "#4D6BFE";
+    $("custom-color").value = selPrimary;
+    $("bg-image").value = p.backgroundImage || "";
+    $("injected-css").value = p.injectedCss || "";
+    renderSwatches();
   }).catch(() => {});
 </script>
 </body>
