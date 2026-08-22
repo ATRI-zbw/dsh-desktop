@@ -20,7 +20,9 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          # @electron/rebuild >= 4.2.0 / node-abi >= 4.33 require node >= 22.12.0;
+          # Node 20 fails with a silent rebuilder crash right after native deps.
+          node-version: 24
           cache: npm
 
       - name: Install dependencies
@@ -83,15 +85,15 @@ jobs:
           ELECTRON_BUILDER_BINARIES_MIRROR: https://npmmirror.com/mirrors/electron-builder-binaries/
         shell: pwsh
         run: |
-          npm run dist *> build-output.log
+          # 直接输出到 stdout 让 GitHub 记录完整日志（不重定向，避免静默失败时丢错误）
+          npm run dist 2>&1 | Tee-Object -FilePath build-output.log
           $code = $LASTEXITCODE
           Write-Host "BUILD_EXIT=$code"
           if ($code -ne 0) {
             # 把错误暴露为 annotation,便于通过 API 读取
-            Get-Content build-output.log -Tail 40 | ForEach-Object { Write-Host "::error::$($_)" }
+            Get-Content build-output.log -Tail 60 | ForEach-Object { Write-Host "::error::$($_)" }
             exit $code
           }
-          Get-Content build-output.log -Tail 15
 
       - name: Upload build log on failure
         if: failure()

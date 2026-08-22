@@ -5,6 +5,10 @@
   "main": "main.js",
   "author": "dsh-desktop",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/ATRI-zbw/dsh-desktop.git"
+  },
   "scripts": {
     "start": "electron .",
     "icon": "node scripts/make-icon.js",
