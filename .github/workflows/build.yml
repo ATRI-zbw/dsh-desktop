@@ -43,8 +43,10 @@ jobs:
           Remove-Item "vendor\node-tmp" -Recurse -Force
           Remove-Item "$env:TEMP\node.zip" -Force
           # 安装 dsh 到临时前缀,再把 node_modules 复制为 vendor/dsh
+          # --allow-scripts 放行 koffi/node-pty 等原生模块的 postinstall 构建
           $prefix = Join-Path $env:TEMP "dsh-prefix"
-          npm install -g @deepseek-ai/dsh --prefix $prefix --no-fund --no-audit
+          $allow = "koffi,node-pty,@deepseek-ai/dsh-subprocess-local,@google/genai,protobufjs"
+          npm install -g @deepseek-ai/dsh --prefix $prefix --no-fund --no-audit --allow-scripts=$allow
           $dshSrc = Join-Path $prefix "node_modules\@deepseek-ai\dsh"
           Copy-Item $dshSrc "vendor\dsh" -Recurse -Force
           Write-Host "vendor ready:"
