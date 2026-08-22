@@ -498,48 +498,54 @@ function themeDiagLog(msg) {
   } catch {}
 }
 
-/** 组装注入 dsh web 页面的主题 CSS(主题色 + 自定义背景 + 用户 CSS)。 */
-function themeCss(prefs) {
+/** 读取背景图并转为 base64 data URL;失败返回 null。 */
+function readBgDataUrl(prefs) {
+  if (!prefs.backgroundImage) return null;
+  try {
+    const buf = fs.readFileSync(prefs.backgroundImage);
+    const ext = path.extname(prefs.backgroundImage).toLowerCase().replace(".", "");
+    const mime =
+      { png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg", webp: "image/webp", bmp: "image/bmp", gif: "image/gif" }[ext] ||
+      "image/png";
+    return `data:${mime};base64,${buf.toString("base64")}`;
+  } catch {
+    return null;
+  }
+}
+
+/** 把主题应用到已加载的 dsh web 页面。
+ * 背景图通过独立背景层 div(position:fixed; z-index:-1)呈现,
+ * 位于所有内容之下,任何容器的背景色都盖不住它。
+ * 主题色/自定义 CSS 走 <style> 标签。均可替换,可重复调用。 */
+const THEME_STYLE_ID = "dsh-desktop-theme-style";
+const THEME_BG_ID = "dsh-desktop-bg-layer";
+function applyThemeToWeb(prefs) {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  const bg = readBgDataUrl(prefs);
+  themeDiagLog(`applyThemeToWeb: bg=${prefs.backgroundImage || "(none)"} -> ${bg ? "dataUrl(" + Math.round(bg.length / 1024) + "KB)" : "null"}`);
   let css = "";
-  if (prefs.backgroundImage) {
-    // file:// 会被 Chromium 拦截(http 页面禁止加载本地文件),
-    // 改为读取文件转 base64 data URL,保证跨源可用。
-    try {
-      const buf = fs.readFileSync(prefs.backgroundImage);
-      const ext = path.extname(prefs.backgroundImage).toLowerCase().replace(".", "");
-      const mime =
-        { png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg", webp: "image/webp", bmp: "image/bmp", gif: "image/gif" }[ext] ||
-        "image/png";
-      const dataUrl = `data:${mime};base64,${buf.toString("base64")}`;
-      themeDiagLog(`themeCss: bg=${prefs.backgroundImage} size=${buf.length}B mime=${mime} cssReady`);
-      // 多容器覆盖 + 顶层容器透明化:SPA 常在主容器上设背景色盖住 body
-      css += [
-        `html,body{background-image:url("${dataUrl}") !important;background-size:cover !important;background-position:center !important;background-repeat:no-repeat !important;background-attachment:fixed !important;background-color:transparent !important;}`,
-        `body>div,body>#root,body>#app,#root,#app{background:transparent !important;background-image:none !important;background-color:transparent !important;}`,
-      ].join("\n");
-    } catch {
-      // 图片不可读则退回渐变
-      if (prefs.primary) {
-        css += `html,body{background:linear-gradient(160deg,${prefs.primary} 0%,${prefs.primary} 32%,${prefs.dark || "#1D2A6E"} 100%) !important;}`;
-      }
-    }
+  if (bg) {
+    // 背景层样式:固定在页面最底层
+    css += `#${THEME_BG_ID}{position:fixed !important;inset:0 !important;z-index:-1 !important;pointer-events:none !important;background-image:url("${bg}") !important;background-size:cover !important;background-position:center !important;background-repeat:no-repeat !important;}`;
   } else if (prefs.primary) {
     css += `html,body{background:linear-gradient(160deg,${prefs.primary} 0%,${prefs.primary} 32%,${prefs.dark || "#1D2A6E"} 100%) !important;}`;
   }
   if (prefs.injectedCss) css += "\n" + prefs.injectedCss;
-  return css;
-}
-
-/** 把主题应用到已加载的 dsh web 页面。
- * 用 executeJavaScript 注入带唯一 id 的 <style> 标签(替换式),
- * 比 insertCSS 更可靠且可重复调用。 */
-const THEME_STYLE_ID = "dsh-desktop-theme-style";
-function applyThemeToWeb(prefs) {
-  if (!mainWindow || mainWindow.isDestroyed()) return;
-  const css = themeCss(prefs);
-  themeDiagLog(`applyThemeToWeb: css=${css.length}B`);
+  themeDiagLog(`applyThemeToWeb: bgLayer=${bg ? "yes" : "no"} css=${css.length}B`);
   const script = `(() => {
     try {
+      // 背景层 div
+      let b = document.getElementById(${JSON.stringify(THEME_BG_ID)});
+      if (${bg ? "true" : "false"}) {
+        if (!b) {
+          b = document.createElement("div");
+          b.id = ${JSON.stringify(THEME_BG_ID)};
+          document.body.appendChild(b);
+        }
+      } else if (b) {
+        b.remove();
+      }
+      // 样式标签
       let s = document.getElementById(${JSON.stringify(THEME_STYLE_ID)});
       if (!s) {
         s = document.createElement("style");
@@ -547,7 +553,7 @@ function applyThemeToWeb(prefs) {
         document.head.appendChild(s);
       }
       s.textContent = ${JSON.stringify(css)};
-      return "ok:" + s.textContent.length;
+      return "ok:bg=" + (${bg ? "true" : "false"}) + ",css=" + s.textContent.length;
     } catch (e) { return "err:" + String(e); }
   })()`;
   mainWindow.webContents
