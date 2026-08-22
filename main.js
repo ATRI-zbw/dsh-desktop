@@ -404,6 +404,38 @@ function collectTokenUsage() {
   return acc;
 }
 
+// ---------------------------------------------------------------- DeepSeek 余额
+/**
+ * 查询 DeepSeek 账户余额(GET /user/balance)。
+ * API key 由主进程从凭据读取,绝不进入浏览器。失败返回 { ok:false }。
+ */
+function fetchBalance(timeoutMs = 8000) {
+  return new Promise((resolve) => {
+    const key = readStoredKey();
+    if (!key) return resolve({ ok: false, error: "未配置 API Key" });
+    const req = https.get(
+      "https://api.deepseek.com/user/balance",
+      { headers: { Authorization: `Bearer ${key}`, Accept: "application/json" }, timeout: timeoutMs },
+      (res) => {
+        res.resume();
+        let body = "";
+        res.on("data", (d) => (body += d));
+        res.on("end", () => {
+          if (res.statusCode !== 200) return resolve({ ok: false, error: `HTTP ${res.statusCode}` });
+          try {
+            const j = JSON.parse(body);
+            resolve({ ok: true, isAvailable: j.is_available, balanceInfos: j.balance_infos || [] });
+          } catch {
+            resolve({ ok: false, error: "响应解析失败" });
+          }
+        });
+      }
+    );
+    req.on("timeout", () => req.destroy());
+    req.on("error", (e) => resolve({ ok: false, error: e.message }));
+  });
+}
+
 // ---------------------------------------------------------------- 更新内置 dsh
 function updateBundledDsh() {
   return new Promise((resolve) => {
@@ -567,6 +599,14 @@ function registerIpc() {
 
   ipcMain.handle("settings:get-tokens", () => collectTokenUsage());
 
+  // ---- 主窗口挂饰用(dsh:* 命名空间,与设置窗口区分) ----
+  ipcMain.handle("dsh:open-settings", () => {
+    openSettings();
+    return true;
+  });
+  ipcMain.handle("dsh:get-tokens", () => collectTokenUsage());
+  ipcMain.handle("dsh:get-balance", () => fetchBalance());
+
   ipcMain.handle("settings:get-prefs", () => ({ ...theme }));
 
   ipcMain.handle("settings:set-prefs", (_e, prefs) => {
@@ -651,6 +691,7 @@ function createWindow(url) {
     autoHideMenuBar: true,
     icon: path.join(__dirname, "assets", "icon.png"),
     webPreferences: {
+      preload: path.join(__dirname, "settings", "inject-preload.js"),
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: true,
@@ -701,8 +742,27 @@ if (!gotLock) {
       }
       if (mainWindow && !mainWindow.isDestroyed()) {
         mainWindow.loadURL(`http://127.0.0.1:${port}`);
-        // 页面加载后注入主题(等 dsh web 就绪)
-        mainWindow.webContents.once("did-finish-load", () => applyThemeToWeb(theme));
+        // 注入主题 + 右下角挂饰(监听导航到 dsh 域时执行,兼容 SPA)
+        const injectOnce = () => {
+          applyThemeToWeb(theme);
+          try {
+            const widget = fs.readFileSync(path.join(__dirname, "settings", "inject-widget.js"), "utf8");
+            mainWindow.webContents.executeJavaScript(widget).catch(() => {});
+          } catch {}
+        };
+        mainWindow.webContents.on("did-navigate", (e, url) => {
+          if (url.startsWith(`http://127.0.0.1:${port}`)) injectOnce();
+        });
+        // 首次加载也可能先触发 did-navigate,兜底 did-finish-load
+        mainWindow.webContents.once("did-finish-load", () => {
+          applyThemeToWeb(theme);
+          setTimeout(() => {
+            try {
+              const widget = fs.readFileSync(path.join(__dirname, "settings", "inject-widget.js"), "utf8");
+              mainWindow.webContents.executeJavaScript(widget).catch(() => {});
+            } catch {}
+          }, 800);
+        });
       }
       // 服务就绪后:首次使用引导(无 Key) + 静默检查更新
       if (!readStoredKey()) {
