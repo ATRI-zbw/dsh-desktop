@@ -491,6 +491,13 @@ function savePrefs(prefs) {
   fs.renameSync(tmp, prefsFile());
 }
 
+/** 主题诊断日志(写固定文件,便于排查注入链路)。 */
+function themeDiagLog(msg) {
+  try {
+    fs.appendFileSync(path.join(app.getPath("userData"), "theme-diag.log"), `[${new Date().toISOString()}] ${msg}\n`);
+  } catch {}
+}
+
 /** 组装注入 dsh web 页面的主题 CSS(主题色 + 自定义背景 + 用户 CSS)。 */
 function themeCss(prefs) {
   let css = "";
@@ -504,6 +511,7 @@ function themeCss(prefs) {
         { png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg", webp: "image/webp", bmp: "image/bmp", gif: "image/gif" }[ext] ||
         "image/png";
       const dataUrl = `data:${mime};base64,${buf.toString("base64")}`;
+      themeDiagLog(`themeCss: bg=${prefs.backgroundImage} size=${buf.length}B mime=${mime} cssReady`);
       // 多容器覆盖 + 顶层容器透明化:SPA 常在主容器上设背景色盖住 body
       css += [
         `html,body{background-image:url("${dataUrl}") !important;background-size:cover !important;background-position:center !important;background-repeat:no-repeat !important;background-attachment:fixed !important;background-color:transparent !important;}`,
@@ -529,6 +537,7 @@ const THEME_STYLE_ID = "dsh-desktop-theme-style";
 function applyThemeToWeb(prefs) {
   if (!mainWindow || mainWindow.isDestroyed()) return;
   const css = themeCss(prefs);
+  themeDiagLog(`applyThemeToWeb: css=${css.length}B`);
   const script = `(() => {
     try {
       let s = document.getElementById(${JSON.stringify(THEME_STYLE_ID)});
@@ -538,10 +547,13 @@ function applyThemeToWeb(prefs) {
         document.head.appendChild(s);
       }
       s.textContent = ${JSON.stringify(css)};
-      return true;
-    } catch (e) { return false; }
+      return "ok:" + s.textContent.length;
+    } catch (e) { return "err:" + String(e); }
   })()`;
-  mainWindow.webContents.executeJavaScript(script).catch(() => {});
+  mainWindow.webContents
+    .executeJavaScript(script)
+    .then((r) => themeDiagLog(`executeJavaScript -> ${r}`))
+    .catch((e) => themeDiagLog(`executeJavaScript rejected: ${e && e.message}`));
 }
 
 // ---------------------------------------------------------------- 设置窗口
@@ -788,6 +800,7 @@ if (!gotLock) {
         };
         mainWindow.webContents.on("did-finish-load", () => {
           const url = mainWindow.webContents.getURL();
+          themeDiagLog(`did-finish-load url=${url}`);
           if (!url.startsWith(`http://127.0.0.1:${port}`)) return;
           // 立即 + 延迟重试(等 SPA 首屏渲染完),确保主题生效
           injectAll();
