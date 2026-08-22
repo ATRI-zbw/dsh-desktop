@@ -123,21 +123,13 @@
   // 之后 token 每 30 秒自动刷新,余额不自动(避免频繁调 API)
   setInterval(refreshTokens, 30000);
 
-  // 背景监测:SPA 路由切换可能覆盖背景图,检测到被覆盖则请求主进程重注入
-  function sampleBackground() {
-    try {
-      const cs = getComputedStyle(document.body);
-      return cs.backgroundColor + "|" + (cs.backgroundImage || "");
-    } catch {
-      return "";
-    }
-  }
-  const baseline = sampleBackground();
+  // 背景层监测:背景图通过 #dsh-desktop-bg-layer div 呈现,
+  // 整页刷新或异常移除时该层消失,触发主进程重注入
   setInterval(() => {
     if (!api.reapplyTheme) return;
-    const now = sampleBackground();
-    if (now && baseline && now !== baseline) {
-      api.reapplyTheme().catch(() => {});
-    }
-  }, 5000);
+    const layer = document.getElementById("dsh-desktop-bg-layer");
+    if (layer) return; // 背景层在,无需处理
+    // 背景层不在了:若 prefs 有背景图,重注入;无背景图则忽略(纯渐变走 style 标签)
+    api.reapplyTheme().catch(() => {});
+  }, 8000);
 })();
