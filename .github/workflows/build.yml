@@ -105,12 +105,14 @@ jobs:
             Write-Host "::warning::build-output.log lines: $((Get-Content build-output.log).Count)"
             $lines = @(Get-Content build-output.log)
             $total = $lines.Count
-            for ($i = 4; $i -ge 0; $i--) {
-              $end = $total - ($i * 200)
-              $start = [math]::Max(0, $end - 200)
-              if ($start -ge $total) { continue }
-              $seg = $lines[$start..([math]::Min($total - 1, $end - 1))] -join "`n"
-              Write-Host "::error::--- seg$i lines $($start+1)-$end ---"
+            # 从尾部取最多 1000 行,每 200 行一段,段内行号标注在段头
+            $startIdx = [math]::Max(0, $total - 1000)
+            for ($k = 0; $k -lt 5; $k++) {
+              $segStart = $startIdx + ($k * 200)
+              if ($segStart -ge $total) { break }
+              $segEnd = [math]::Min($total - 1, $segStart + 199)
+              $seg = $lines[$segStart..$segEnd] -join "`n"
+              Write-Host "::error::--- seg$k lines $($segStart+1)-$($segEnd+1) ---"
               Write-Host $seg
             }
             exit $code
