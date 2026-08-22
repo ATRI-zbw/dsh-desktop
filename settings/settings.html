@@ -1,0 +1,159 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<title>DeepSeek Harness 桌面版 · 设置</title>
+<style>
+  :root { --blue:#4D6BFE; --dark:#1D2A6E; --bg:#f5f7fb; --card:#fff; --text:#1f2430; --muted:#6b7280; --ok:#16a34a; --err:#dc2626; --warn:#d97706; }
+  * { box-sizing:border-box; margin:0; padding:0; }
+  body { font-family:"Segoe UI","Microsoft YaHei",sans-serif; background:var(--bg); color:var(--text); padding:24px; }
+  h1 { font-size:18px; margin-bottom:4px; }
+  .sub { color:var(--muted); font-size:12px; margin-bottom:20px; }
+  .card { background:var(--card); border-radius:10px; padding:18px 20px; margin-bottom:16px; box-shadow:0 1px 3px rgba(0,0,0,.06); }
+  .card h2 { font-size:14px; margin-bottom:12px; color:var(--dark); }
+  .row { display:flex; align-items:center; gap:10px; margin-bottom:10px; font-size:13px; }
+  .row .label { width:130px; color:var(--muted); flex-shrink:0; }
+  .row .value { font-weight:600; }
+  .badge { display:inline-block; padding:2px 10px; border-radius:999px; font-size:12px; }
+  .badge.ok { background:#dcfce7; color:var(--ok); }
+  .badge.no { background:#fee2e2; color:var(--err); }
+  .badge.warn { background:#fef3c7; color:var(--warn); }
+  input[type=text] { flex:1; padding:8px 12px; border:1px solid #d1d5db; border-radius:6px; font-size:13px; }
+  button { padding:8px 16px; border:none; border-radius:6px; font-size:13px; cursor:pointer; background:var(--blue); color:#fff; }
+  button:hover { filter:brightness(1.08); }
+  button:disabled { background:#c7cede; cursor:not-allowed; }
+  button.ghost { background:#eef2ff; color:var(--blue); }
+  button.danger { background:#fef2f2; color:var(--err); border:1px solid #fecaca; }
+  .msg { margin-top:10px; font-size:13px; min-height:18px; }
+  .msg.ok { color:var(--ok); } .msg.err { color:var(--err); } .msg.info { color:var(--muted); }
+  .hint { color:var(--muted); font-size:12px; margin-top:6px; line-height:1.6; }
+  a { color:var(--blue); }
+</style>
+</head>
+<body>
+  <h1>DeepSeek Harness 桌面版 · 设置</h1>
+  <div class="sub">首次使用请先配置 API Key；如需帮助见 <a href="#" id="faq-link">FAQ</a></div>
+
+  <div class="card">
+    <h2>环境状态</h2>
+    <div class="row"><span class="label">应用版本</span><span class="value" id="app-version">-</span></div>
+    <div class="row"><span class="label">Node.js</span><span class="value" id="node-version">-</span></div>
+    <div class="row"><span class="label">dsh CLI</span><span class="value" id="dsh-version">-</span></div>
+    <div class="row"><span class="label">API Key</span><span class="badge no" id="key-badge">未配置</span></div>
+  </div>
+
+  <div class="card">
+    <h2>API Key 配置</h2>
+    <div class="row">
+      <span class="label">API Key</span>
+      <input type="text" id="api-key" placeholder="粘贴 sk- 开头的 API Key" autocomplete="off" spellcheck="false">
+      <button id="save-key">保存</button>
+    </div>
+    <div class="hint">还没有 Key？<a href="#" id="open-platform">前往 DeepSeek 开放平台</a> 注册并创建 API Key（https://platform.deepseek.com）。Key 仅保存在本机 <code>~\.dsh\.credentials.yaml</code>，请勿外泄。</div>
+    <div class="msg" id="key-msg"></div>
+  </div>
+
+  <div class="card">
+    <h2>更新</h2>
+    <div class="row">
+      <span class="label">应用更新</span>
+      <span class="value" id="update-status">检查中…</span>
+      <button id="check-update" class="ghost">检查更新</button>
+    </div>
+    <div class="row">
+      <span class="label">内置 dsh</span>
+      <span class="value" id="dsh-update-status">-</span>
+      <button id="update-dsh">更新内置 dsh</button>
+    </div>
+    <div class="msg" id="update-msg"></div>
+    <div class="hint">「更新内置 dsh」会从 npm 下载最新版到用户目录（不修改安装目录），下次启动生效。应用更新会跳转到 GitHub Releases 下载页。</div>
+  </div>
+
+<script>
+  const $ = (id) => document.getElementById(id);
+  const api = window.dshSettings;
+
+  function setMsg(el, text, cls) {
+    el.textContent = text;
+    el.className = "msg " + (cls || "");
+  }
+
+  function maskKey(k) {
+    if (!k) return "未配置";
+    return k.length > 10 ? k.slice(0, 6) + "…" + k.slice(-4) : "已配置";
+  }
+
+  async function refreshStatus() {
+    try {
+      const s = await api.getStatus();
+      $("app-version").textContent = s.appVersion || "-";
+      $("node-version").textContent = s.nodeVersion || "-";
+      $("dsh-version").textContent = s.dshVersion || "-";
+      const hasKey = !!s.hasKey;
+      const badge = $("key-badge");
+      badge.textContent = hasKey ? ("已配置 " + maskKey(s.keyHint)) : "未配置";
+      badge.className = "badge " + (hasKey ? "ok" : "no");
+      if (hasKey) $("api-key").value = "";
+      $("dsh-update-status").textContent = s.usingUserDsh ? "用户级（已更新）" : "内置版";
+    } catch (e) {
+      setMsg($("key-msg"), "读取状态失败：" + e.message, "err");
+    }
+  }
+
+  $("save-key").addEventListener("click", async () => {
+    const key = $("api-key").value.trim();
+    if (!key) { setMsg($("key-msg"), "请输入 API Key", "warn"); return; }
+    try {
+      const r = await api.setApiKey(key);
+      if (r.ok) { setMsg($("key-msg"), "已保存 ✓", "ok"); $("api-key").value = ""; refreshStatus(); }
+      else setMsg($("key-msg"), "保存失败：" + (r.error || ""), "err");
+    } catch (e) { setMsg($("key-msg"), "保存失败：" + e.message, "err"); }
+  });
+
+  $("open-platform").addEventListener("click", (e) => {
+    e.preventDefault();
+    api.openDownload("https://platform.deepseek.com");
+  });
+  $("faq-link").addEventListener("click", (e) => {
+    e.preventDefault();
+    api.openDownload("https://github.com/ATRI-zbw/dsh-desktop/blob/main/docs/FAQ.md");
+  });
+
+  $("check-update").addEventListener("click", async () => {
+    setMsg($("update-msg"), "检查中…", "info");
+    try {
+      const r = await api.checkUpdate();
+      if (r.ok && r.update) {
+        $("update-status").textContent = "发现新版 v" + r.latest;
+        setMsg($("update-msg"), "有新版本可用（v" + r.latest + "），点击右侧按钮跳转下载。", "warn");
+      } else if (r.ok) {
+        $("update-status").textContent = "已是最新版";
+        setMsg($("update-msg"), "当前已是最新版本。", "ok");
+      } else {
+        $("update-status").textContent = "检查失败";
+        setMsg($("update-msg"), "检查更新失败：" + (r.error || "网络不可用"), "err");
+      }
+    } catch (e) { setMsg($("update-msg"), "检查更新失败：" + e.message, "err"); }
+  });
+
+  $("update-dsh").addEventListener("click", async () => {
+    const btn = $("update-dsh");
+    btn.disabled = true;
+    setMsg($("update-msg"), "正在下载最新 dsh（需要网络，约 1-3 分钟）…", "info");
+    try {
+      const r = await api.updateDsh();
+      if (r.ok) { setMsg($("update-msg"), "更新完成 ✓ 重启应用后生效", "ok"); refreshStatus(); }
+      else setMsg($("update-msg"), "更新失败：" + (r.error || ""), "err");
+    } catch (e) { setMsg($("update-msg"), "更新失败：" + e.message, "err"); }
+    btn.disabled = false;
+  });
+
+  refreshStatus();
+  // 自动检查一次应用更新
+  api.checkUpdate().then((r) => {
+    if (r.ok && r.update) $("update-status").textContent = "发现新版 v" + r.latest;
+    else if (r.ok) $("update-status").textContent = "已是最新版";
+  }).catch(() => {});
+</script>
+</body>
+</html>

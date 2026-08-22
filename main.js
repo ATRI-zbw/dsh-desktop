@@ -9,16 +9,19 @@
  *   DSH_DESKTOP_NODE  指定 node.exe 的绝对路径
  *   DSH_DESKTOP_DSH   指定 dsh CLI 的 lib/bin.js 绝对路径
  */
-const { app, BrowserWindow, dialog } = require("electron");
+const { app, BrowserWindow, dialog, ipcMain, Menu, Tray, shell } = require("electron");
 const { spawn, execFileSync } = require("node:child_process");
 const { createServer } = require("node:net");
 const http = require("node:http");
+const https = require("node:https");
 const fs = require("node:fs");
 const path = require("node:path");
 const os = require("node:os");
 
 const APP_TITLE = "DeepSeek Harness 桌面版";
 const READY_TIMEOUT_MS = 120_000; // dsh web 首次启动可能较慢
+const GITHUB_REPO = "ATRI-zbw/dsh-desktop";
+const GITHUB_API = `https://api.github.com/repos/${GITHUB_REPO}/releases/latest`;
 
 let mainWindow = null;
 let serverProcess = null;
@@ -92,10 +95,18 @@ function bundledDshBin() {
   return null;
 }
 
-/** 解析 @deepseek-ai/dsh 的 lib/bin.js(优先内置,退回系统全局;环境变量可覆盖)。 */
+/** 用户级 dsh 更新副本(userData\dsh-update),优先级最高(不修改安装目录)。 */
+function userDshBin() {
+  const p = path.join(app.getPath("userData"), "dsh-update", "node_modules", "@deepseek-ai", "dsh", "lib", "bin.js");
+  return exists(p) ? p : null;
+}
+
+/** 解析 @deepseek-ai/dsh 的 lib/bin.js(优先用户更新副本→内置→系统全局;环境变量可覆盖)。 */
 function resolveDshBin(node) {
   const over = process.env.DSH_DESKTOP_DSH;
   if (over && exists(over)) return over;
+  const user = userDshBin();
+  if (user) return user;
   const bundled = bundledDshBin();
   if (bundled) return bundled;
   const candidates = [];
@@ -209,6 +220,244 @@ function killServerTree() {
   }
 }
 
+// ---------------------------------------------------------------- 版本与更新
+function parseVersion(v) {
+  const m = String(v || "").replace(/^v/i, "").match(/^(\d+)\.(\d+)\.(\d+)/);
+  return m ? { major: +m[1], minor: +m[2], patch: +m[3] } : null;
+}
+
+/** 比较两个版本: a > b 返回 1, a === b 返回 0, a < b 返回 -1, 无法解析返回 null。 */
+function compareVersions(a, b) {
+  const pa = parseVersion(a), pb = parseVersion(b);
+  if (!pa || !pb) return null;
+  for (const k of ["major", "minor", "patch"]) {
+    if (pa[k] !== pb[k]) return pa[k] > pb[k] ? 1 : -1;
+  }
+  return 0;
+}
+
+/** 查询 GitHub 最新 Release(静默失败:无网/非 2xx/超时都返回 null)。 */
+function fetchLatestRelease(timeoutMs = 8000) {
+  return new Promise((resolve) => {
+    const req = https.get(
+      GITHUB_API,
+      { headers: { "User-Agent": `dsh-desktop/${app.getVersion()}` }, timeout: timeoutMs },
+      (res) => {
+        res.resume();
+        if (res.statusCode !== 200) return resolve(null);
+        let body = "";
+        res.on("data", (d) => (body += d));
+        res.on("end", () => {
+          try {
+            const j = JSON.parse(body);
+            resolve({ tag: j.tag_name || "", url: j.html_url || "", publishedAt: j.published_at || null });
+          } catch {
+            resolve(null);
+          }
+        });
+      }
+    );
+    req.on("timeout", () => req.destroy());
+    req.on("error", () => resolve(null));
+  });
+}
+
+/** 半自动更新检查:有新版时弹窗提示。返回 { update, latest, url }。 */
+async function checkForUpdates(interactive = false) {
+  const rel = await fetchLatestRelease();
+  if (!rel) {
+    if (interactive) {
+      dialog.showMessageBox(mainWindow, {
+        type: "info",
+        title: APP_TITLE,
+        message: "无法检查更新",
+        detail: "网络不可用或 GitHub 暂时无法访问，请稍后再试。",
+        buttons: ["知道了"],
+      });
+    }
+    return { update: false, error: "network" };
+  }
+  const cmp = compareVersions(rel.tag, app.getVersion());
+  if (cmp === null) return { update: false, error: "parse" };
+  if (cmp <= 0) return { update: false, latest: rel.tag };
+  if (interactive || true) {
+    const { response } = await dialog.showMessageBox(mainWindow, {
+      type: "info",
+      title: APP_TITLE,
+      message: `发现新版本 v${rel.tag.replace(/^v/i, "")}`,
+      detail: `当前版本 v${app.getVersion()}。是否前往 GitHub Releases 下载新版本？`,
+      buttons: ["前往下载", "以后再说"],
+      defaultId: 0,
+      cancelId: 1,
+    });
+    if (response === 0) shell.openExternal(rel.url);
+  }
+  return { update: true, latest: rel.tag, url: rel.url };
+}
+
+// ---------------------------------------------------------------- API Key 管理
+function dshHome() {
+  return process.env.DSH_HOME || path.join(os.homedir(), ".dsh");
+}
+function credentialsFile() {
+  return path.join(dshHome(), ".credentials.yaml");
+}
+
+function readStoredKey() {
+  try {
+    const f = credentialsFile();
+    if (!fs.existsSync(f)) return null;
+    const line = fs.readFileSync(f, "utf8").split(/\r?\n/).find((l) => /^\s*DEEPSEEK_API_KEY\s*:/.test(l));
+    if (!line) return null;
+    return line.split(":", 2)[1].trim().trim('"').trim("'") || null;
+  } catch {
+    return null;
+  }
+}
+
+function writeStoredKey(key) {
+  const f = credentialsFile();
+  fs.mkdirSync(path.dirname(f), { recursive: true });
+  const existing = fs.existsSync(f) ? fs.readFileSync(f, "utf8").split(/\r?\n/) : [];
+  const kept = existing.filter((l) => !/^\s*DEEPSEEK_API_KEY\s*:/.test(l));
+  kept.push(`DEEPSEEK_API_KEY: ${key}`);
+  const tmp = f + ".tmp";
+  fs.writeFileSync(tmp, kept.join("\n") + "\n", "utf8");
+  fs.renameSync(tmp, f);
+}
+
+// ---------------------------------------------------------------- 更新内置 dsh
+function updateBundledDsh() {
+  return new Promise((resolve) => {
+    const node = resolveNode();
+    if (!node) return resolve({ ok: false, error: "未找到 node.exe" });
+    const targetDir = path.join(app.getPath("userData"), "dsh-update");
+    const npmCli = path.join(path.dirname(node), "node_modules", "npm", "bin", "npm-cli.js");
+    const args = [npmCli, "install", "-g", "@deepseek-ai/dsh", "--prefix", targetDir, "--no-fund", "--no-audit"];
+    const child = spawn(node, args, { windowsHide: true, stdio: ["ignore", "pipe", "pipe"] });
+    let errTail = "";
+    child.stdout.on("data", () => {});
+    child.stderr.on("data", (d) => {
+      errTail = (errTail + d.toString()).slice(-2000);
+    });
+    child.on("error", (e) => resolve({ ok: false, error: e.message }));
+    child.on("exit", (code) => {
+      const bin = path.join(targetDir, "node_modules", "@deepseek-ai", "dsh", "lib", "bin.js");
+      if (code === 0 && fs.existsSync(bin)) {
+        resolve({ ok: true, path: bin });
+      } else {
+        resolve({ ok: false, error: `安装失败 (code=${code})`, log: errTail });
+      }
+    });
+  });
+}
+
+// ---------------------------------------------------------------- 设置窗口
+let settingsWindow = null;
+function openSettings() {
+  if (settingsWindow && !settingsWindow.isDestroyed()) {
+    settingsWindow.focus();
+    return settingsWindow;
+  }
+  settingsWindow = new BrowserWindow({
+    width: 560,
+    height: 620,
+    resizable: false,
+    minimizable: false,
+    maximizable: false,
+    title: `${APP_TITLE} · 设置`,
+    parent: mainWindow || undefined,
+    modal: false,
+    autoHideMenuBar: true,
+    icon: path.join(__dirname, "assets", "icon.png"),
+    webPreferences: {
+      preload: path.join(__dirname, "settings", "settings-preload.js"),
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true,
+    },
+  });
+  settingsWindow.loadFile(path.join(__dirname, "settings", "settings.html"));
+  settingsWindow.on("closed", () => (settingsWindow = null));
+  return settingsWindow;
+}
+
+function registerIpc() {
+  ipcMain.handle("settings:get-status", () => {
+    const node = resolveNode();
+    let nodeVersion = null;
+    if (node) {
+      try {
+        nodeVersion = execFileSync(node, ["--version"], { encoding: "utf8", timeout: 10_000, windowsHide: true }).trim();
+      } catch {}
+    }
+    const dshBin = resolveDshBin(node);
+    let dshVersion = null;
+    if (dshBin) {
+      try {
+        dshVersion = execFileSync(node, [dshBin, "--version"], { encoding: "utf8", timeout: 10_000, windowsHide: true }).trim();
+      } catch {}
+    }
+    const key = readStoredKey();
+    return {
+      appVersion: app.getVersion(),
+      nodeVersion,
+      dshVersion,
+      hasKey: !!key,
+      keyHint: key ? key.slice(0, 8) : null,
+      usingUserDsh: !!userDshBin(),
+    };
+  });
+
+  ipcMain.handle("settings:set-api-key", (_e, key) => {
+    const k = String(key || "").trim();
+    if (!/^sk-[A-Za-z0-9]{16,}$/.test(k)) {
+      return { ok: false, error: "Key 格式不正确（应以 sk- 开头）" };
+    }
+    try {
+      writeStoredKey(k);
+      return { ok: true };
+    } catch (err) {
+      return { ok: false, error: err.message };
+    }
+  });
+
+  ipcMain.handle("settings:check-update", async () => {
+    const rel = await fetchLatestRelease();
+    if (!rel) return { ok: false, error: "网络不可用" };
+    const cmp = compareVersions(rel.tag, app.getVersion());
+    return { ok: true, update: cmp > 0, latest: rel.tag, url: rel.url };
+  });
+
+  ipcMain.handle("settings:update-dsh", async () => updateBundledDsh());
+
+  ipcMain.handle("settings:open-download", (_e, url) => {
+    if (typeof url === "string" && url.startsWith("https://")) shell.openExternal(url);
+    return true;
+  });
+}
+
+// ---------------------------------------------------------------- 托盘
+let tray = null;
+function createTray() {
+  try {
+    const iconPath = path.join(__dirname, "assets", "icon.png");
+    tray = new Tray(iconPath);
+    tray.setToolTip(APP_TITLE);
+    const menu = Menu.buildFromTemplate([
+      { label: "打开主界面", click: () => { if (mainWindow) { mainWindow.show(); mainWindow.focus(); } } },
+      { label: "设置", click: () => openSettings() },
+      { label: "检查更新", click: () => checkForUpdates(true) },
+      { type: "separator" },
+      { label: "退出", click: () => app.quit() },
+    ]);
+    tray.setContextMenu(menu);
+    tray.on("click", () => { if (mainWindow) { mainWindow.show(); mainWindow.focus(); } });
+  } catch {
+    tray = null; // 托盘失败不影响主功能
+  }
+}
+
 // ---------------------------------------------------------------- 窗口
 const SPLASH_HTML = `<!doctype html><html lang="zh"><head><meta charset="utf-8"><style>
 html,body{margin:0;height:100%;display:flex;flex-direction:column;align-items:center;justify-content:center;background:linear-gradient(135deg,#4D6BFE,#1D2A6E);color:#fff;font-family:"Segoe UI","Microsoft YaHei",sans-serif}
@@ -253,6 +502,9 @@ if (!gotLock) {
   });
 
   app.whenReady().then(async () => {
+    registerIpc();
+    if (!SMOKE_TEST) createTray();
+
     const node = resolveNode();
     const dshBin = resolveDshBin(node);
     if (!dshBin) {
@@ -275,6 +527,30 @@ if (!gotLock) {
       if (mainWindow && !mainWindow.isDestroyed()) {
         mainWindow.loadURL(`http://127.0.0.1:${port}`);
       }
+      // 服务就绪后:首次使用引导(无 Key) + 静默检查更新
+      if (!readStoredKey()) {
+        dialog
+          .showMessageBox(mainWindow, {
+            type: "info",
+            title: APP_TITLE,
+            message: "首次使用：请配置 API Key",
+            detail:
+              "使用 DeepSeek Harness 需要 API Key。\n\n点击「去配置」后，在设置窗口粘贴你的 API Key；还没有的话，浏览器会打开 DeepSeek 开放平台引导你创建。",
+            buttons: ["去配置", "稍后再说"],
+            defaultId: 0,
+            cancelId: 1,
+          })
+          .then(({ response }) => {
+            if (response === 0) {
+              openSettings();
+              shell.openExternal("https://platform.deepseek.com");
+            }
+          });
+      }
+      // 静默检查更新(不打断首次引导,延迟几秒)
+      setTimeout(() => {
+        checkForUpdates().catch(() => {});
+      }, 5000);
     } catch (err) {
       if (mainWindow && !mainWindow.isDestroyed()) {
         mainWindow.loadURL("data:text/html;charset=utf-8," + encodeURIComponent(

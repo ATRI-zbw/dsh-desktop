@@ -24,7 +24,8 @@
     "files": [
       "main.js",
       "package.json",
-      "assets/**/*"
+      "assets/**/*",
+      "settings/**/*"
     ],
     "extraResources": [
       {
