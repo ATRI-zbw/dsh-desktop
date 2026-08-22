@@ -24,7 +24,29 @@ jobs:
           cache: npm
 
       - name: Install dependencies
+        shell: pwsh
         run: npm ci
+
+      - name: Ensure electron binary (allow-scripts strips postinstall)
+        shell: pwsh
+        run: |
+          # npm 11 allow-scripts 策略会在 npm ci 时剥离 electron 的 postinstall,
+          # 导致二进制缺失;这里直接从镜像下载 electron zip 解压到 dist/
+          $dist = "node_modules\electron\dist"
+          if (Test-Path "$dist\electron.exe") {
+            Write-Host "electron binary already present"
+          } else {
+            $ver = (Get-Content node_modules\electron\package.json | ConvertFrom-Json).version
+            Write-Host "Downloading electron $ver binary..."
+            New-Item -ItemType Directory -Path $dist -Force | Out-Null
+            $zip = "$env:TEMP\electron-$ver.zip"
+            Invoke-WebRequest -Uri "https://npmmirror.com/mirrors/electron/$ver/electron-v$ver-win32-x64.zip" -OutFile $zip -UseBasicParsing
+            Expand-Archive -Path $zip -DestinationPath $dist -Force
+            Remove-Item $zip -Force
+            # 标记版本文件(install.js 会写)
+            Set-Content -Path "$dist\version" -Value $ver
+          }
+          Test-Path "$dist\electron.exe"
 
       - name: Prepare vendor (bundled node + dsh)
         shell: pwsh
