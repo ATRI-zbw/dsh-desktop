@@ -56,6 +56,9 @@ jobs:
         run: npm run icon
 
       - name: Build (portable + nsis)
+        env:
+          ELECTRON_MIRROR: https://npmmirror.com/mirrors/electron/
+          ELECTRON_BUILDER_BINARIES_MIRROR: https://npmmirror.com/mirrors/electron-builder-binaries/
         run: npm run dist
 
       - name: Package launcher zip
