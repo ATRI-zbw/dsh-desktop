@@ -122,4 +122,22 @@
   setTimeout(refreshBalance, 2000);
   // 之后 token 每 30 秒自动刷新,余额不自动(避免频繁调 API)
   setInterval(refreshTokens, 30000);
+
+  // 背景监测:SPA 路由切换可能覆盖背景图,检测到被覆盖则请求主进程重注入
+  function sampleBackground() {
+    try {
+      const cs = getComputedStyle(document.body);
+      return cs.backgroundColor + "|" + (cs.backgroundImage || "");
+    } catch {
+      return "";
+    }
+  }
+  const baseline = sampleBackground();
+  setInterval(() => {
+    if (!api.reapplyTheme) return;
+    const now = sampleBackground();
+    if (now && baseline && now !== baseline) {
+      api.reapplyTheme().catch(() => {});
+    }
+  }, 5000);
 })();

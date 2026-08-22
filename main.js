@@ -504,7 +504,11 @@ function themeCss(prefs) {
         { png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg", webp: "image/webp", bmp: "image/bmp", gif: "image/gif" }[ext] ||
         "image/png";
       const dataUrl = `data:${mime};base64,${buf.toString("base64")}`;
-      css += `html,body{background-image:url("${dataUrl}") !important;background-size:cover !important;background-position:center !important;background-repeat:no-repeat !important;background-attachment:fixed !important;}`;
+      // 多容器覆盖 + 中间层透明化:SPA 常在主容器上设背景色盖住 body
+      css += [
+        `html,body{background-image:url("${dataUrl}") !important;background-size:cover !important;background-position:center !important;background-repeat:no-repeat !important;background-attachment:fixed !important;background-color:transparent !important;}`,
+        `body>div,body>#root,body>#app,#root,#app{background:transparent !important;}`,
+      ].join("\n");
     } catch {
       // 图片不可读则退回渐变
       if (prefs.primary) {
@@ -519,12 +523,20 @@ function themeCss(prefs) {
 }
 
 /** 把主题应用到已加载的 dsh web 页面(注入 CSS)。 */
+let injectedCssKey = null;
 function applyThemeToWeb(prefs) {
   if (!mainWindow || mainWindow.isDestroyed()) return;
   const css = themeCss(prefs);
-  mainWindow.webContents
-    .insertCSS(css)
-    .catch(() => {});
+  const apply = async () => {
+    try {
+      if (injectedCssKey !== null) {
+        await mainWindow.webContents.removeInsertedCSS(injectedCssKey).catch(() => {});
+        injectedCssKey = null;
+      }
+      injectedCssKey = await mainWindow.webContents.insertCSS(css);
+    } catch {}
+  };
+  apply();
 }
 
 // ---------------------------------------------------------------- 设置窗口
@@ -620,6 +632,10 @@ function registerIpc() {
   });
   ipcMain.handle("dsh:get-tokens", () => collectTokenUsage());
   ipcMain.handle("dsh:get-balance", () => fetchBalance());
+  ipcMain.handle("dsh:reapply-theme", () => {
+    applyThemeToWeb(theme);
+    return true;
+  });
 
   ipcMain.handle("settings:get-prefs", () => ({ ...theme }));
 
@@ -756,26 +772,21 @@ if (!gotLock) {
       }
       if (mainWindow && !mainWindow.isDestroyed()) {
         mainWindow.loadURL(`http://127.0.0.1:${port}`);
-        // 注入主题 + 右下角挂饰(监听导航到 dsh 域时执行,兼容 SPA)
-        const injectOnce = () => {
+        // 页面完全加载后再注入主题 + 挂饰(did-finish-load 时 insertCSS 才可靠;
+        // SPA 内部路由不触发 did-navigate,背景被覆盖由挂饰内监测自动重注入)
+        const injectAll = () => {
           applyThemeToWeb(theme);
           try {
             const widget = fs.readFileSync(path.join(__dirname, "settings", "inject-widget.js"), "utf8");
             mainWindow.webContents.executeJavaScript(widget).catch(() => {});
           } catch {}
         };
-        mainWindow.webContents.on("did-navigate", (e, url) => {
-          if (url.startsWith(`http://127.0.0.1:${port}`)) injectOnce();
-        });
-        // 首次加载也可能先触发 did-navigate,兜底 did-finish-load
-        mainWindow.webContents.once("did-finish-load", () => {
-          applyThemeToWeb(theme);
-          setTimeout(() => {
-            try {
-              const widget = fs.readFileSync(path.join(__dirname, "settings", "inject-widget.js"), "utf8");
-              mainWindow.webContents.executeJavaScript(widget).catch(() => {});
-            } catch {}
-          }, 800);
+        mainWindow.webContents.on("did-finish-load", () => {
+          // 只对 dsh 域页面注入(排除 splash 等 data: URL)
+          const url = mainWindow.webContents.getURL();
+          if (url.startsWith(`http://127.0.0.1:${port}`)) {
+            injectAll();
+          }
         });
       }
       // 服务就绪后:首次使用引导(无 Key) + 静默检查更新

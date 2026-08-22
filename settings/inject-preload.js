@@ -13,4 +13,6 @@ contextBridge.exposeInMainWorld("dshDesktop", {
   getTokens: () => ipcRenderer.invoke("dsh:get-tokens"),
   // 查询 DeepSeek 余额
   getBalance: () => ipcRenderer.invoke("dsh:get-balance"),
+  // 重新注入主题 CSS(背景被覆盖时由挂饰监测触发)
+  reapplyTheme: () => ipcRenderer.invoke("dsh:reapply-theme"),
 });
