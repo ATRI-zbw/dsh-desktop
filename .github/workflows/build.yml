@@ -59,7 +59,21 @@ jobs:
         env:
           ELECTRON_MIRROR: https://npmmirror.com/mirrors/electron/
           ELECTRON_BUILDER_BINARIES_MIRROR: https://npmmirror.com/mirrors/electron-builder-binaries/
-        run: npm run dist
+        shell: pwsh
+        run: |
+          npm run dist *> build-output.log
+          $code = $LASTEXITCODE
+          Write-Host "BUILD_EXIT=$code"
+          Get-Content build-output.log -Tail 60
+          if ($code -ne 0) { exit $code }
+
+      - name: Upload build log on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-failure-log
+          path: build-output.log
+          retention-days: 14
 
       - name: Package launcher zip
         shell: pwsh
